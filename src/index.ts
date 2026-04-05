@@ -7,7 +7,8 @@ import {
   getBalance,
   getTokenBalance,
 } from "./wallet";
-import { getQuote, executeSwap } from "./swap";
+import { getQuote as kyberGetQuote, executeSwap as kyberExecuteSwap } from "./swap";
+import { getQuote as oneinchGetQuote, executeSwap as oneinchExecuteSwap } from "./swap_1inch";
 import { TOKENS, BASE_CHAIN_ID } from "./config";
 
 const program = new Command();
@@ -15,7 +16,7 @@ const program = new Command();
 program
   .name("swapbot")
   .description(
-    "EVM bot for BASE chain — create wallets and swap tokens via KyberSwap"
+    "EVM bot for BASE chain — create wallets and swap tokens via KyberSwap or 1inch"
   )
   .version("1.0.0");
 
@@ -89,20 +90,22 @@ program
 // ── quote ────────────────────────────────────────────────────────────────────
 program
   .command("quote")
-  .description("Get a swap quote from KyberSwap without executing")
+  .description("Get a swap quote from an aggregator without executing")
   .requiredOption("--from <token>", "Token to swap from (symbol or address)")
   .requiredOption("--to <token>", "Token to swap to (symbol or address)")
   .requiredOption("--amount <amount>", "Amount to swap (human-readable, e.g. 0.01)")
   .option("--slippage <bps>", "Slippage tolerance in bps (default: 50 = 0.5%)", "50")
-  .action(async (opts: { from: string; to: string; amount: string; slippage: string }) => {
+  .option("--aggregator <name>", "Aggregator to use: kyberswap or 1inch (default: kyberswap)", "kyberswap")
+  .action(async (opts: { from: string; to: string; amount: string; slippage: string; aggregator: string }) => {
     try {
       const tokenIn = resolveToken(opts.from);
       const tokenOut = resolveToken(opts.to);
+      const agg = resolveAggregator(opts.aggregator);
 
-      console.log(`\nFetching quote: ${opts.amount} ${opts.from.toUpperCase()} → ${opts.to.toUpperCase()}`);
+      console.log(`\nFetching quote: ${opts.amount} ${opts.from.toUpperCase()} → ${opts.to.toUpperCase()} via ${agg.label}`);
       console.log("Please wait...\n");
 
-      const quote = await getQuote({
+      const quote = await agg.getQuote({
         tokenIn: tokenIn.address,
         tokenOut: tokenOut.address,
         amountIn: opts.amount,
@@ -112,11 +115,14 @@ program
       });
 
       console.log("=== Quote ===");
+      console.log(`Aggregator : ${agg.label}`);
       console.log(`Amount In  : ${opts.amount} ${opts.from.toUpperCase()}`);
       console.log(`Amount Out : ${quote.amountOut} ${opts.to.toUpperCase()}`);
       console.log(`Price Impact: ${quote.priceImpact}`);
       console.log(`Gas Estimate: ${quote.gas}`);
-      console.log(`Router     : ${quote.routerAddress}`);
+      if (quote.routerAddress) {
+        console.log(`Router     : ${quote.routerAddress}`);
+      }
       console.log("=============\n");
     } catch (err) {
       console.error("❌ Error:", (err as Error).message);
@@ -127,12 +133,13 @@ program
 // ── swap ─────────────────────────────────────────────────────────────────────
 program
   .command("swap")
-  .description("Swap tokens on BASE via KyberSwap aggregator")
+  .description("Swap tokens on BASE via KyberSwap or 1inch aggregator")
   .requiredOption("--from <token>", "Token to swap from (symbol or address)")
   .requiredOption("--to <token>", "Token to swap to (symbol or address)")
   .requiredOption("--amount <amount>", "Amount to swap (human-readable, e.g. 0.01)")
   .option("--slippage <bps>", "Slippage tolerance in bps (default: 50 = 0.5%)", "50")
   .option("--yes", "Skip confirmation prompt", false)
+  .option("--aggregator <name>", "Aggregator to use: kyberswap or 1inch (default: kyberswap)", "kyberswap")
   .action(
     async (opts: {
       from: string;
@@ -140,14 +147,16 @@ program
       amount: string;
       slippage: string;
       yes: boolean;
+      aggregator: string;
     }) => {
       try {
         const wallet = loadWallet();
         const tokenIn = resolveToken(opts.from);
         const tokenOut = resolveToken(opts.to);
         const slippage = parseInt(opts.slippage, 10);
+        const agg = resolveAggregator(opts.aggregator);
 
-        console.log(`\nFetching quote: ${opts.amount} ${opts.from.toUpperCase()} → ${opts.to.toUpperCase()}`);
+        console.log(`\nFetching quote: ${opts.amount} ${opts.from.toUpperCase()} → ${opts.to.toUpperCase()} via ${agg.label}`);
         console.log("Please wait...\n");
 
         const quoteParams = {
@@ -159,16 +168,19 @@ program
           slippage,
         };
 
-        const quote = await getQuote(quoteParams);
+        const quote = await agg.getQuote(quoteParams);
 
         console.log("=== Swap Details ===");
+        console.log(`Aggregator : ${agg.label}`);
         console.log(`Wallet     : ${wallet.address}`);
         console.log(`Amount In  : ${opts.amount} ${opts.from.toUpperCase()}`);
         console.log(`Amount Out : ~${quote.amountOut} ${opts.to.toUpperCase()}`);
         console.log(`Price Impact: ${quote.priceImpact}`);
         console.log(`Slippage   : ${slippage / 100}%`);
         console.log(`Gas Estimate: ${quote.gas}`);
-        console.log(`Router     : ${quote.routerAddress}`);
+        if (quote.routerAddress) {
+          console.log(`Router     : ${quote.routerAddress}`);
+        }
         console.log("====================\n");
 
         if (!opts.yes) {
@@ -180,7 +192,7 @@ program
         }
 
         console.log("Executing swap...");
-        const txHash = await executeSwap(wallet, quoteParams, quote);
+        const txHash = await agg.executeSwap(wallet, quoteParams, quote);
         console.log(`\n✅ Swap submitted!`);
         console.log(`TX Hash: ${txHash}`);
         console.log(`View on BaseScan: https://basescan.org/tx/${txHash}\n`);
@@ -219,6 +231,24 @@ program
   });
 
 // ── helpers ───────────────────────────────────────────────────────────────────
+
+function resolveAggregator(name: string): {
+  label: string;
+  getQuote: typeof kyberGetQuote;
+  executeSwap: typeof kyberExecuteSwap;
+} {
+  switch (name.toLowerCase()) {
+    case "1inch":
+      return { label: "1inch", getQuote: oneinchGetQuote, executeSwap: oneinchExecuteSwap };
+    case "kyberswap":
+    case "kyber":
+      return { label: "KyberSwap", getQuote: kyberGetQuote, executeSwap: kyberExecuteSwap };
+    default:
+      throw new Error(
+        `Unknown aggregator: "${name}". Use "kyberswap" or "1inch".`
+      );
+  }
+}
 
 function resolveToken(input: string): {
   address: string;

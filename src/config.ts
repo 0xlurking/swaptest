@@ -10,6 +10,10 @@ export const BASE_RPC_URL =
 export const KYBERSWAP_BASE_URL =
   "https://aggregator-api.kyberswap.com/base/api/v1";
 
+export const ONEINCH_BASE_URL =
+  "https://api.1inch.dev/swap/v6.0/8453";
+export const ONEINCH_API_KEY = process.env.ONEINCH_API_KEY || "";
+
 // Well-known BASE token addresses
 export const TOKENS: Record<string, { address: string; decimals: number; symbol: string }> = {
   ETH: {
