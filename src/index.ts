@@ -19,6 +19,58 @@ program
   )
   .version("1.0.0");
 
+// ── start ─────────────────────────────────────────────────────────────────────
+program
+  .command("start")
+  .description("Start the bot: show wallet status and available commands")
+  .action(async () => {
+    console.log("\n╔══════════════════════════════════════╗");
+    console.log("║        swapbot — BASE Chain Bot      ║");
+    console.log("╚══════════════════════════════════════╝\n");
+
+    let wallet;
+    try {
+      wallet = loadWallet();
+    } catch {
+      console.log("⚠️  No wallet found.\n");
+      console.log("To get started, create a wallet first:\n");
+      console.log("  node dist/index.js create-wallet\n");
+      console.log("Then fund it with ETH on BASE and run:\n");
+      console.log("  node dist/index.js start\n");
+      return;
+    }
+
+    console.log(`✅ Bot running on BASE (chain ${BASE_CHAIN_ID})\n`);
+    displayWallet(wallet, false);
+
+    console.log("Fetching balances...\n");
+    try {
+      const ethBalance = await getBalance(wallet.address);
+      const tokenSymbols = Object.keys(TOKENS).filter((k) => k !== "ETH");
+      console.log("=== Balances ===");
+      console.log(`ETH    : ${ethBalance} ETH`);
+
+      for (const symbol of tokenSymbols) {
+        const token = TOKENS[symbol];
+        try {
+          const bal = await getTokenBalance(wallet.address, token.address, token.decimals);
+          console.log(`${symbol.padEnd(6)}: ${bal} ${symbol}`);
+        } catch {
+          console.log(`${symbol.padEnd(6)}: (error fetching balance)`);
+        }
+      }
+      console.log("================\n");
+    } catch {
+      console.log("⚠️  Could not fetch balances (check your RPC connection).\n");
+    }
+
+    console.log("Available commands:");
+    console.log("  balance                          — show balances");
+    console.log("  quote --from ETH --to USDC --amount 0.01  — get swap quote");
+    console.log("  swap  --from ETH --to USDC --amount 0.01  — execute swap");
+    console.log("  tokens                           — list supported tokens\n");
+  });
+
 // ── create-wallet ────────────────────────────────────────────────────────────
 program
   .command("create-wallet")
